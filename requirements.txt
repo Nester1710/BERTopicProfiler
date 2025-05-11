@@ -1,0 +1,8 @@
+pandas
+emoji
+pymorphy2
+spacy
+bertopic
+umap-learn
+hdbscan
+collections-extended  # Counter
