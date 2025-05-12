@@ -9,7 +9,7 @@ def train_bertopic(docs: list[str]) -> tuple:
 
     # Векторизация с биграммами и фильтрацией редких слов
     vectorizer_model = CountVectorizer(
-        ngram_range=(1),
+        ngram_range=(1, 1),
         min_df=3,
         stop_words=None
     )
