@@ -2,10 +2,6 @@ import os
 import json
 
 def load_json_array(path: str) -> list:
-    """
-    Надёжно читает любой большой JSON-массив из одного файла,
-    вычленяя объекты {…} по учёту вложенности скобок.
-    """
     text = open(path, "r", encoding="utf-8").read()
     start = text.find("[")
     end   = text.rfind("]")
@@ -33,9 +29,6 @@ def load_json_array(path: str) -> list:
     return records
 
 def load_raw_records(raw_dir: str) -> list:
-    """
-    Обходит все .json в папке raw_dir и возвращает единый список словарей.
-    """
     records = []
     for fname in os.listdir(raw_dir):
         if not fname.lower().endswith(".json"):
