@@ -1,44 +1,38 @@
 import os
-import pandas as pd
 
-from src.data_loader       import load_raw_records
-from src.preprocessing     import preprocess_records
-from src.feature_extraction import add_statistical_features
-from src.modeling          import train_bertopic, save_topic_assignments
-from src.visualization     import visualize_barchart, visualize_hierarchy
+from src.data_loader import load_raw_records
+from src.preprocessing import preprocess_records
+from src.modeling import train_bertopic, save_model, save_topic_assignments
+from src.visualization import visualize_barchart, visualize_hierarchy, visualize_topics
 
 def main():
-    raw_dir       = os.path.join("data", "raw")
-    processed_dir = os.path.join("data", "processed")
-    output_dir    = "outputs"
-
-    os.makedirs(processed_dir, exist_ok=True)
+    # Пути
+    raw_dir = os.path.join("data", "raw")
+    output_dir = "outputs"
     os.makedirs(output_dir, exist_ok=True)
 
-    # 1. Загрузка и предобработка
+    # Загрузка и препроцессинг
     records = load_raw_records(raw_dir)
-    df_pre  = preprocess_records(records)
-    pre_path = os.path.join(processed_dir, "preprocessed.csv")
-    df_pre.to_csv(pre_path, index=False, encoding="utf-8")
-    print(f"Сохранено предобработанное: {pre_path}")
+    df = preprocess_records(records)
+    df.to_csv(os.path.join("data", "processed", "preprocessed.csv"), index=False, encoding="utf-8")
+    print("Сохранено предобработанное: data/processed/preprocessed.csv")
 
-    # 2. Вычисление признаков
-    df_feat = add_statistical_features(df_pre)
+    # Подготовка документов
+    docs_model = df["lemmas_filtered"].apply(lambda lst: " ".join(lst)).tolist()
+    docs_label = df["cleaned_text"].tolist()
 
-    # 3. Тематическое моделирование
-    docs = df_feat["processed_text"].tolist()
-    model, topics, probs = train_bertopic(docs)
+    # Обучение модели
+    model, topics, probs = train_bertopic(docs_model)
+    save_model(model)
 
-    # 4. Сохранение распределения по темам
-    assign_path = os.path.join(output_dir, "topic_assignments.csv")
-    save_topic_assignments(topics, probs, docs, assign_path)
-    print(f"Сохранены назначения тем: {assign_path}")
+    # Сохранение результатов
+    save_topic_assignments(topics, probs, docs_label, os.path.join(output_dir, "topic_assignments.csv"))
 
-    # 5. Визуализация
-    bar_path = visualize_barchart(model, top_n=10, output_dir=output_dir)
-    tree_path = visualize_hierarchy(model, output_dir=output_dir)
-    print(f"Сохранено: {bar_path}")
-    print(f"Сохранено: {tree_path}")
+    # Визуализация
+    model.generate_topic_labels()
+    visualize_barchart(model, top_n=10, output_dir=output_dir)
+    visualize_hierarchy(model, output_dir=output_dir)
+    visualize_topics(model, output_dir=output_dir)
 
 if __name__ == "__main__":
     main()

@@ -1,68 +1,88 @@
-# src/preprocessing.py
-
-import inspect
-from inspect import getfullargspec
-def getargspec(func):
-    spec = getfullargspec(func)
-    return spec.args, spec.varargs, spec.varkw, spec.defaults
-import inspect
-inspect.getargspec = getargspec
-
+import re
+import emoji
 import pandas as pd
 from pymorphy2 import MorphAnalyzer
 import spacy
-from functools import lru_cache
+from collections import Counter
 from tqdm import tqdm
+import inspect
+from inspect import getfullargspec
 
-from .utils import clean_text
+def getargspec(func):
+    spec = getfullargspec(func)
+    return spec.args, spec.varargs, spec.varkw, spec.defaults
 
-# Настройка морфоанализатора и стоп-слов spaCy
+inspect.getargspec = getargspec
+
+# Инициализация
 morph = MorphAnalyzer()
 nlp = spacy.blank("ru")
 SPACY_STOPWORDS = nlp.Defaults.stop_words
 
-@lru_cache(maxsize=None)
-def lemmatize_word(word: str) -> str:
+def clean_text(text: str) -> str:
     """
-    Возвращает нормальную форму слова через pymorphy2,
-    результат запоминается в кэше.
+    Очищает текст от ссылок, эмодзи, тегов, лишних символов.
     """
-    return morph.parse(word)[0].normal_form
+    text = emoji.replace_emoji(text, replace="")
+    text = re.sub(r"http\S+|www\.\S+|https\S+", "", text)
+    text = re.sub(r"\[.*?\]", "", text)  # Telegram club/user ссылки
+    text = re.sub(r"[^\w\sа-яА-ЯёЁ]", "", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip().lower()
+
+def is_informative_token(token: str) -> bool:
+    """
+    Отсекает мусорные токены:
+    - слишком короткие;
+    - полностью цифровые;
+    - одиночные символы.
+    """
+    return len(token) > 2 and not token.isdigit()
 
 def preprocess_records(records: list[dict]) -> pd.DataFrame:
     """
-    Обрабатывает записи:
-      1) чистит текст;
-      2) токенизирует;
-      3) лемматизирует через кэшированную функцию;
-      4) фильтрует стоп-слова spaCy;
-      5) формирует DataFrame с колонками:
-         original_text, processed_text, tokens, lemmas
-    Индикатор прогресса выводится через tqdm.
+    Универсальный препроцессинг для тематического моделирования.
+    Возвращает DataFrame с колонками:
+      - cleaned_text: строка без ссылок и мусора
+      - tokens: список слов
+      - lemmas: все леммы без дубликатов
+      - lemmas_filtered: леммы без стоп-слов и числового шума
+      - lemmas_with_counts: список (лемма, count), где count > 1
     """
     rows = []
+
     for rec in tqdm(records, desc="Preprocessing", unit="doc"):
         text = rec.get("message")
         if not isinstance(text, str):
             continue
 
+        # 1. Очистка текста
         cleaned = clean_text(text)
-        tokens  = cleaned.split()
+
+        # 2. Токенизация + отбор
+        tokens = [t for t in cleaned.split() if is_informative_token(t)]
         if len(tokens) < 5:
             continue
 
-        # Лемматизация с кэшированием
-        lemmas = [lemmatize_word(w) for w in tokens]
-        # Фильтрация стоп-слов
-        lemmas = [lm for lm in lemmas if lm and lm not in SPACY_STOPWORDS]
-        if len(lemmas) < 5:
+        # 3. Лемматизация
+        lemmas = [morph.parse(t)[0].normal_form for t in tokens]
+
+        # 4. Фильтрация лемм
+        lemmas_filtered = [lm for lm in lemmas if lm not in SPACY_STOPWORDS and is_informative_token(lm)]
+        if len(lemmas_filtered) < 5:
             continue
 
+        # 5. Частотные леммы
+        freqs = Counter(lemmas_filtered)
+        lemmas_with_counts = [(lm, cnt) for lm, cnt in freqs.items() if cnt > 1]
+
+        # 6. Сбор строки
         rows.append({
-            "original_text":  text,
-            "processed_text": " ".join(lemmas),
-            "tokens":         tokens,
-            "lemmas":         lemmas
+            "cleaned_text":        cleaned,
+            "tokens":              tokens,
+            "lemmas":              list(set(lemmas)),
+            "lemmas_filtered":     lemmas_filtered,
+            "lemmas_with_counts":  lemmas_with_counts
         })
 
     return pd.DataFrame(rows)
