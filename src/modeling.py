@@ -1,52 +1,70 @@
 import pandas as pd
 from bertopic import BERTopic
-from sklearn.feature_extraction.text import CountVectorizer
 from sentence_transformers import SentenceTransformer
+from stop_words import get_stop_words
+from sklearn.feature_extraction.text import CountVectorizer
+from tqdm import tqdm
 
 def train_bertopic(docs: list[str]) -> tuple:
-    # Эмбеддинговая модель для русского и других языков
-    embedding_model = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    docs = [doc if isinstance(doc, str) else "" for doc in docs]
+    docs = [doc for doc in docs if doc.strip()]
 
-    # Векторизация с биграммами и фильтрацией редких слов
-    vectorizer_model = CountVectorizer(
-        ngram_range=(1, 1),
-        min_df=3,
-        stop_words=None
-    )
-
-    # Инициализация BERTopic
+    # Инициализация моделей
+    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+    stop_words = get_stop_words('russian')
+    vectorizer = CountVectorizer(stop_words=stop_words)
     topic_model = BERTopic(
         embedding_model=embedding_model,
-        vectorizer_model=vectorizer_model,
-        min_topic_size=10,
-        nr_topics="auto",
-        language="multilingual",
-        verbose=True
+        vectorizer_model=vectorizer,
+        language='russian'
     )
 
-    # Обучение
-    topics, probs = topic_model.fit_transform(docs)
+    # Этап 1: извлечение эмбеддингов
+    embeddings = embedding_model.encode(docs, show_progress_bar=True)
+
+    # Этап 2: обучение модели
+    with tqdm(total=1, desc='Fitting BERTopic') as bar:
+        topics, probs = topic_model.fit_transform(docs, embeddings)
+        bar.update(1)
+
+    # Этап 3: генерация меток тем
+    topic_model.generate_topic_labels()
+
     return topic_model, topics, probs
 
-def save_topic_assignments(topics, probs, docs: list[str], result_path: str, stats_path: str = None):
-    from bertopic import BERTopic
-    model = BERTopic.load("bertopic_model")
-    labels = model.generate_topic_labels()
-    label_map = {i: "_".join(label.split("_")[1:]).replace("_", " ")
-    for i, label in enumerate(labels)}
+def save_topic_assignments(
+    topic_model,
+    topics: list[int],
+    probs,
+    docs: list[str],
+    result_path: str,
+    stats_path: str = None
+) -> None:
 
-    # Итоговая таблица по документам
-    df_result = pd.DataFrame({
-        "Topic": topics,
-        "Topic_Label": [label_map.get(t) for t in topics],
-        "Probability": [p.max() if p is not None else None for p in probs],
-        "cleaned_text": docs,
-    })
-    df_result.to_csv(result_path, index=False, encoding="utf-8")
+    # Составляем таблицу с результатами
+    rows = []
+    for doc, topic, prob in zip(docs, topics, probs):
+        label = topic_model.topic_labels_.get(topic, '')
+        rows.append({
+            'Topic': topic,
+            'Topic_Label': label,
+            'Probability': prob,
+            'cleaned_text': doc
+        })
+    pd.DataFrame(rows).to_csv(result_path, index=False)
 
-    # Статистика по темам
-    if stats_path and model:
-        df_stats = model.get_topic_info()
-        df_stats = df_stats[["Topic", "Count", "Name"]].rename(columns={"Name": "Topic_Label"})
-        df_stats["Top Terms"] = df_stats["Topic"].apply(lambda i: ", ".join([term for term, _ in model.get_topic(i)]))
-        df_stats.to_csv(stats_path, index=False, encoding="utf-8")
+    # Генерируем статистику по темам
+    info = topic_model.get_topic_info()
+    stats = []
+    for _, row in info.iterrows():
+        topic_id = row.Topic
+        if topic_id == -1:
+            continue  # пропускаем шум
+        top_terms = [term for term, _ in topic_model.get_topic(topic_id)]
+        stats.append({
+            'Topic': topic_id,
+            'Topic_Label': row.Name,
+            'Count': row.Count,
+            'Top_Terms': ', '.join(top_terms)
+        })
+    pd.DataFrame(stats).to_csv(stats_path, index=False)

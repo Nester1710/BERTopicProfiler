@@ -1,42 +1,19 @@
-import os
-import json
+import csv
+from pathlib import Path
 
-def load_json_array(path: str) -> list:
-    text = open(path, "r", encoding="utf-8").read()
-    start = text.find("[")
-    end   = text.rfind("]")
-    if start < 0 or end < 0 or end <= start:
-        raise ValueError("Нет JSON-массива в квадратных скобках")
-    inner = text[start+1:end]
-
+def load_raw_records(raw_dir: str) -> list[dict]:
     records = []
-    depth = 0
-    obj_start = None
-    for i, ch in enumerate(inner):
-        if ch == "{":
-            if depth == 0:
-                obj_start = i
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0 and obj_start is not None:
-                obj_str = inner[obj_start : i+1]
-                try:
-                    records.append(json.loads(obj_str))
-                except json.JSONDecodeError:
-                    pass
-                obj_start = None
-    return records
-
-def load_raw_records(raw_dir: str) -> list:
-    records = []
-    for fname in os.listdir(raw_dir):
-        if not fname.lower().endswith(".json"):
-            continue
-        path = os.path.join(raw_dir, fname)
+    for csv_path in Path(raw_dir).glob('*.csv'):
         try:
-            recs = load_json_array(path)
-            records.extend(recs)
+            with csv_path.open(encoding='utf-8', newline='') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    records.append({
+                        'collection': row.get('collection', '').strip() or None,
+                        'message_id': int(row['message_id']) if row.get('message_id') else None,
+                        'text': row.get('text', '').strip(),
+                        'date': float(row['date']) if row.get('date') else None
+                    })
         except Exception as e:
-            print(f"Warning: не удалось загрузить {fname}: {e}")
+            print(f"Warning: не удалось загрузить {csv_path.name}: {e}")
     return records

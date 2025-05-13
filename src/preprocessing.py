@@ -1,72 +1,43 @@
-from pymorphy2 import MorphAnalyzer
-from collections import Counter
-from tqdm import tqdm
+import re
 import pandas as pd
 from multiprocessing import Pool, cpu_count
-import inspect
-import spacy
-import re
+from tqdm import tqdm
 
-from inspect import getfullargspec
-def getargspec(func):
-    spec = getfullargspec(func)
-    return spec.args, spec.varargs, spec.varkw, spec.defaults
-inspect.getargspec = getargspec
+STOP_PHRASES = ['ПОДПИСАТЬСЯ на АГП ЯЛТА КРЫМ']
 
-# Инициализация
-morph = MorphAnalyzer()
-nlp = spacy.blank("ru")
-SPACY_STOPWORDS = nlp.Defaults.stop_words
+def preprocess_text(text: str) -> str:
+    # Удаляем URL
+    text = re.sub(r'http\S+|www\.]\S+', '', text)
+    # Удаляем хэштеги
+    text = re.sub(r'#\w+', '', text)
+    # Удаляем телефонные номера (+1234567890, 12-34-56 и т.п.)
+    text = re.sub(r'\+?\d[\d\-\s]{7,}\d', '', text)
+    # Оставляем только буквы, цифры и пробелы
+    text = re.sub(r'[^0-9A-Za-zА-Яа-яЁё\s]', ' ', text)
+    # Сжимаем несколько пробелов в один
+    text = re.sub(r'\s+', ' ', text).strip()
 
-# Очистка текста
-def clean_text(text: str) -> str:
-    text = re.sub(r"\[.*?\]", "", text)                     # Telegram club/user ссылки
-    text = re.sub(r"http\S+|www\.\S+|https\S+", "", text)   # Ссылки
-    text = re.sub(r"[^\w\sа-яА-ЯёЁ]", " ", text)            # Символы
-    text = re.sub(r"\s+", " ", text)                        # Лишние пробелы
-    return text.strip().lower()
+    # Удаляем точные фразы из STOP_PHRASES
+    for phrase in STOP_PHRASES:
+        pattern = rf"\b{re.escape(phrase)}\b"
+        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
+    # Сжимаем пробелы после удаления фраз
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
 
-def is_informative_token(token: str) -> bool:
-    return len(token) > 3 and not token.isdigit()
-
-def process_single_record(rec: dict) -> dict | None:
-    text = rec.get("message")
-    if not isinstance(text, str):
-        return None
-
-    # 1. Очистка текста
-    cleaned = clean_text(text)
-
-    # 2. Токенизация + отбор
-    tokens = [t for t in cleaned.split() if is_informative_token(t)]
-    if len(tokens) < 5:
-        return None
-
-    # 3. Лемматизация
-    lemmas = [morph.parse(t)[0].normal_form for t in tokens]
-
-    # 4. Фильтрация лемм
-    lemmas_filtered = [lm for lm in lemmas if lm not in SPACY_STOPWORDS and is_informative_token(lm)]
-    if len(lemmas_filtered) < 5:
-        return None
-
-    # 5. Частотные леммы
-    freqs = Counter(lemmas_filtered)
-    lemmas_with_counts = [(lm, cnt) for lm, cnt in freqs.items() if cnt > 1]
-
-    # 6. Сбор строки
+def _process_record(record: dict) -> dict:
+    original = record.get('text', '') or ''
+    cleaned = preprocess_text(original)
+    count = len(cleaned.split())
     return {
-        "cleaned_text":        cleaned,
-        "tokens":              tokens,
-        "lemmas":              list(set(lemmas)),
-        "lemmas_filtered":     lemmas_filtered,
-        "lemmas_with_counts":  lemmas_with_counts
+        'original_text': original,
+        'cleaned_text': cleaned,
+        'word_count': count
     }
 
-def preprocess_records(records: list[dict]) -> pd.DataFrame:
-    with Pool(cpu_count() - 1) as pool:
-        rows = list(tqdm(pool.imap(process_single_record, records), total=len(records), desc="Preprocessing", unit="doc"))
-
-    # Убираем None (отфильтрованные записи)
-    rows = [r for r in rows if r is not None]
-    return pd.DataFrame(rows)
+def preprocess_records(records: list) -> pd.DataFrame:
+    total = len(records)
+    with Pool(cpu_count()) as pool:
+        processed = list(tqdm(pool.imap(_process_record, records), total=total))
+    df = pd.DataFrame(processed, columns=['original_text', 'cleaned_text', 'word_count'])
+    return df
