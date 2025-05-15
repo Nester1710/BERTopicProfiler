@@ -9,14 +9,15 @@ def train_bertopic(docs: list[str]) -> tuple:
     docs = [doc if isinstance(doc, str) else "" for doc in docs]
     docs = [doc for doc in docs if doc.strip()]
 
-    # Инициализация моделей
-    embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-    stop_words = get_stop_words('russian')
+    # Инициализация модели
+    embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
+    russian_sw = get_stop_words('russian')
+    english_sw = get_stop_words('english')
+    stop_words = list(dict.fromkeys(russian_sw + english_sw))
     vectorizer = CountVectorizer(stop_words=stop_words)
     topic_model = BERTopic(
         embedding_model=embedding_model,
         vectorizer_model=vectorizer,
-        language='russian'
     )
 
     # Этап 1: извлечение эмбеддингов

@@ -3,7 +3,7 @@ import pandas as pd
 from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
 
-STOP_PHRASES = ['ПОДПИСАТЬСЯ на АГП ЯЛТА КРЫМ']
+STOP_PHRASES = []
 
 def preprocess_text(text: str) -> str:
     # Удаляем URL
@@ -22,14 +22,17 @@ def preprocess_text(text: str) -> str:
         pattern = rf"\b{re.escape(phrase)}\b"
         text = re.sub(pattern, '', text, flags=re.IGNORECASE)
     # Сжимаем пробелы после удаления фраз
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    return re.sub(r'\s+', ' ', text).strip()
 
-def _process_record(record: dict) -> dict:
+def _process_record(args: tuple) -> dict:
+    idx, record = args
     original = record.get('text', '') or ''
     cleaned = preprocess_text(original)
     count = len(cleaned.split())
+    dataset = record.get('dataset', '')
     return {
+        'id': idx,
+        'dataset': dataset,
         'original_text': original,
         'cleaned_text': cleaned,
         'word_count': count
@@ -37,7 +40,11 @@ def _process_record(record: dict) -> dict:
 
 def preprocess_records(records: list) -> pd.DataFrame:
     total = len(records)
+    # Подготовка аргументов для параллельной обработки: кортеж (id, record)
+    args_list = [(i, rec) for i, rec in enumerate(records, start=1)]
+
     with Pool(cpu_count()) as pool:
-        processed = list(tqdm(pool.imap(_process_record, records), total=total))
-    df = pd.DataFrame(processed, columns=['original_text', 'cleaned_text', 'word_count'])
+        processed = list(tqdm(pool.imap(_process_record, args_list), total=total, desc='Preprocessing'))
+
+    df = pd.DataFrame(processed, columns=['id', 'dataset', 'original_text', 'cleaned_text', 'word_count'])
     return df

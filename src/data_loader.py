@@ -9,7 +9,7 @@ def load_raw_records(raw_dir: str) -> list[dict]:
                 reader = csv.DictReader(f)
                 for row in reader:
                     records.append({
-                        'collection': row.get('collection', '').strip() or None,
+                        'dataset': row.get('collection', '').strip() or None,
                         'message_id': int(row['message_id']) if row.get('message_id') else None,
                         'text': row.get('text', '').strip(),
                         'date': float(row['date']) if row.get('date') else None
