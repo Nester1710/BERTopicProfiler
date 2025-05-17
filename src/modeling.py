@@ -3,6 +3,7 @@ from bertopic import BERTopic
 from sentence_transformers import SentenceTransformer
 from stop_words import get_stop_words
 from sklearn.feature_extraction.text import CountVectorizer
+from bertopic.vectorizers import ClassTfidfTransformer
 from tqdm import tqdm
 import umap
 import hdbscan
@@ -35,9 +36,6 @@ def train_bertopic(docs: list[str]) -> tuple:
 
     # 1) Эмбеддинги
     embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-    # — можно попробовать более мощные модели:
-    # embedding_model = SentenceTransformer('multi-qa-mpnet-base-dot-v1')
-    # embedding_model = SentenceTransformer('xlm-r-bert-base-nli-stsb-mean-tokens')
 
     # 2) Стоп-слова и n-граммы
     russian_sw = get_stop_words('russian')
@@ -56,18 +54,21 @@ def train_bertopic(docs: list[str]) -> tuple:
         n_neighbors=15,  # меняйте: 5–50
         n_components=5,  # обычно 2–15
         min_dist=0.0,  # [0.0–0.5], чем меньше — тем плотнее кластеры
-        metric='cosine',
-        random_state=42
+        metric='cosine'
     )
 
     # 4) HDBSCAN для собственно кластеризации
     cluster_model = hdbscan.HDBSCAN(
-        min_cluster_size=12,  # минимум точек в кластере
-        min_samples=13,  # более жёсткий критерий «шумности»
-        cluster_selection_epsilon=0.2,  # позволяет «склеивать» близкие плотности
+        min_cluster_size=15,  # минимум точек в кластере
+        #min_samples=13,  # более жёсткий критерий «шумности»
+        cluster_selection_method="eom",  # более мелкие и плотные кластеры
+        #cluster_selection_epsilon=0.3,  # позволяет «склеивать» близкие плотности
         metric='euclidean',
         prediction_data=True
     )
+
+    # 5) Используем cTF-IDF для выделения заголовков
+    ctfidf_model = ClassTfidfTransformer()
 
     # 5) Собираем BERTopic с новыми параметрами
     topic_model = BERTopic(
@@ -75,6 +76,7 @@ def train_bertopic(docs: list[str]) -> tuple:
         vectorizer_model=vectorizer,
         umap_model=umap_model,
         hdbscan_model=cluster_model,
+        ctfidf_model=ctfidf_model,
         calculate_probabilities=True,
         verbose=True
     )
