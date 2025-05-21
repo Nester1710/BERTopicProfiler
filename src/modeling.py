@@ -27,19 +27,19 @@ class BERTopicTrainer:
         embedder = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
         umap_model = UMAP(
-            n_neighbors=25, n_components=5, min_dist=0.0,
+            n_neighbors=40, n_components=2, min_dist=0.0,
             low_memory=True, n_jobs=-1
         )
         hdbscan_model = HDBSCAN(
-            min_cluster_size=15,
-            cluster_selection_method="eom",
-            cluster_selection_epsilon=0.3,
+            min_cluster_size=50,
+            cluster_selection_method="leaf",
+            cluster_selection_epsilon=0.0,
             prediction_data=True,
             core_dist_n_jobs=-1
         )
         vectorizer = CountVectorizer(
             stop_words=sw, ngram_range=(1, 2),
-            min_df=5, max_df=0.85
+            min_df=30, max_df=0.85
         )
         ctfidf = ClassTfidfTransformer()
 

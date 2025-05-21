@@ -14,7 +14,9 @@ OUTPUTS_DIR = Path("../outputs/")
 
 
 def run_preprocessing():
-    sw = set(get_stop_words("russian") + get_stop_words("english") + ["bbg", "etf", "млрд", "млн", "трлн", "михалыч", "bbgcrypto"])
+    sw = set(get_stop_words("russian") + get_stop_words("english") +
+             ["bbg", "etf", "млрд", "млн", "трлн", "михалыч", "bbgcrypto", "видео", "михаилович", "ура", "благодарить",
+              "здравствуйте", "руб", "bloomberg"])
     preprocess_datasets(RAW_DIR, PREPROC_DIR, sw)
     print("Preprocessing done →", PREPROC_DIR)
 
