@@ -1,54 +1,81 @@
+# preprocessing.py
 import re
+from pathlib import Path
+from typing import Union, Set
+
 import pandas as pd
-from multiprocessing import Pool, cpu_count
 from tqdm import tqdm
-import unicodedata
 
-STOP_PHRASES = []
+import inspect
+from collections import namedtuple
 
-def preprocess_text(text: str) -> str:
+ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "varkw", "defaults"])
 
-    # Приводим текст к нижнему регистру
-    text = unicodedata.normalize('NFKC', text).lower()
-    # Удаляем URL
-    re.sub(r'https?://\S+|www\.\S+', '', text)
-    # Удаляем хэштеги
-    text = re.sub(r'#\w+', '', text)
-    # Удаляем телефонные номера (+1234567890, 12-34-56 и т.п.)
-    re.sub(r'(?:\+?\d{1,3}[\s-]?)?(?:\(?\d{3}\)?[\s-]?)?\d{3}[\s-]?\d{2}[\s-]?\d{2}', '', text)
-    # Оставляем только буквы, цифры и пробелы
-    text = re.sub(r'[^0-9A-Za-zА-Яа-яЁё\s]', ' ', text)
-    # Сжимаем несколько пробелов в один
-    text = re.sub(r'\s+', ' ', text).strip()
+if not hasattr(inspect, "getargspec"):
+    def getargspec(func):
+        full = inspect.getfullargspec(func)
+        return ArgSpec(full.args, full.varargs, full.varkw, full.defaults)
+    inspect.getargspec = getargspec
 
-    # Удаляем точные фразы из STOP_PHRASES
-    for phrase in STOP_PHRASES:
-        pattern = rf"\b{re.escape(phrase)}\b"
-        text = re.sub(pattern, '', text, flags=re.IGNORECASE)
-    # Сжимаем пробелы после удаления фраз
-    return re.sub(r'\s+', ' ', text).strip()
+import pymorphy2
 
-def _process_record(args: tuple) -> dict:
-    idx, record = args
-    original = record.get('text', '') or ''
-    cleaned = preprocess_text(original)
-    count = len(cleaned.split())
-    dataset = record.get('dataset', '')
-    return {
-        'id': idx,
-        'dataset': dataset,
-        'original_text': original,
-        'cleaned_text': cleaned,
-        'word_count': count
-    }
+from data_loader import DataLoader
 
-def preprocess_records(records: list) -> pd.DataFrame:
-    total = len(records)
-    # Подготовка аргументов для параллельной обработки: кортеж (id, record)
-    args_list = [(i, rec) for i, rec in enumerate(records, start=1)]
+morph = pymorphy2.MorphAnalyzer()
 
-    with Pool(cpu_count()) as pool:
-        processed = list(tqdm(pool.imap(_process_record, args_list), total=total, desc='Preprocessing'))
+def clean_text_vectorized(series: pd.Series, stopwords: Set[str]) -> pd.Series:
+    """
+    Vectorized cleaning + lemmatization:
+      - lowercase, remove URLs/htags/phones/digits/punct
+      - split → remove stopwords → lemmatize → join
+    """
+    s = series.fillna("").str.lower()
+    s = s.str.replace(r"http\S+|www\.\S+", "", regex=True)
+    s = s.str.replace(r"[@#]\w+", "", regex=True)
+    s = s.str.replace(r"\+?\d[\d\-\s]{7,}\d", "", regex=True)
+    s = s.str.replace(r"\d+", "", regex=True)
+    s = s.str.replace(r"[^\w\s]", "", regex=True)
 
-    df = pd.DataFrame(processed, columns=['id', 'dataset', 'original_text', 'cleaned_text', 'word_count'])
-    return df
+    # токенизация
+    tokens = s.str.split()
+
+    # стоп-слова + лемматизация
+    def normalize_and_filter(toks):
+        lemmas = []
+        for w in toks:
+            if w and w not in stopwords:
+                lem = morph.parse(w)[0].normal_form
+                if lem not in stopwords:
+                    lemmas.append(lem)
+        return " ".join(lemmas)
+
+    return tokens.apply(normalize_and_filter)
+
+def preprocess_datasets(raw_dir: Union[str, Path],
+                        output_dir: Union[str, Path],
+                        stopwords: Set[str]) -> None:
+    """
+    Для каждого CSV в raw_dir:
+      - загрузка целиком через DataLoader
+      - очистка текста и подсчет word_count
+      - сохранение id, collection, clean_text, word_count в output_dir
+    """
+    raw_dir = Path(raw_dir)
+    output_dir = Path(output_dir)
+    output_dir.mkdir(exist_ok=True)
+
+    loader = DataLoader(raw_dir, output_dir)
+    for src in tqdm(loader.list_raw_datasets(), desc="Preprocessing"):
+        df = loader.load_raw(src)
+        if "text" not in df.columns or "collection" not in df.columns:
+            continue
+
+        df["clean_text"] = clean_text_vectorized(df["text"], stopwords)
+        df["word_count"] = df["clean_text"].str.split().str.len()
+        df = df[df["clean_text"].str.strip().astype(bool)].reset_index(drop=True)
+
+        out = df[["collection", "clean_text", "word_count"]].copy()
+        out.insert(0, "id", range(1, len(out) + 1))
+
+        dst = output_dir / f"{src.stem}_preprocessed.csv"
+        out.to_csv(dst, index=False, encoding="utf-8")
