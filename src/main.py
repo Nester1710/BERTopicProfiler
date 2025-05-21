@@ -1,4 +1,3 @@
-# main.py
 from pathlib import Path
 import sys
 
@@ -7,60 +6,70 @@ from preprocessing import preprocess_datasets
 from modeling import BERTopicTrainer
 from stop_words import get_stop_words
 
-RAW_DIR     = Path("../data/")
+# Пути к директориям
+RAW_DIR = Path("../data/")
 PREPROC_DIR = Path("../preprocess/")
-MODELS_DIR  = Path("../models/")
+MODELS_DIR = Path("../models/")
 OUTPUTS_DIR = Path("../outputs/")
 
 
-def run_preprocessing():
-    sw = set(get_stop_words("russian") + get_stop_words("english") +
-             ["bbg", "etf", "млрд", "млн", "трлн", "михалыч", "bbgcrypto", "видео", "михаилович", "ура", "благодарить",
-              "здравствуйте", "руб", "bloomberg"])
-    preprocess_datasets(RAW_DIR, PREPROC_DIR, sw)
-    print("Preprocessing done →", PREPROC_DIR)
+def run_preprocessing() -> None:
+    """Предобработка сырых данных."""
+    stopwords = set(
+        get_stop_words("russian") +
+        get_stop_words("english") +
+        [
+            "bbg", "etf", "млрд", "млн", "трлн", "михалыч",
+            "bbgcrypto", "видео", "михаилович", "ура",
+            "благодарить", "здравствуйте", "руб", "bloomberg"
+        ]
+    )
+    preprocess_datasets(RAW_DIR, PREPROC_DIR, stopwords)
+    print("Предобработка завершена →", PREPROC_DIR)
 
 
-def run_train():
+def run_training() -> None:
+    """Обучение модели и сохранение результатов."""
     loader = DataLoader(RAW_DIR, PREPROC_DIR)
     df = loader.load_preprocessed()
-    docs = df["clean_text"].tolist()
+    documents = df["clean_text"].tolist()
 
     trainer = BERTopicTrainer()
-    topics, probs = trainer.train(docs)
+    topics, probabilities = trainer.train(documents)
 
-    MODEL_PATH = MODELS_DIR / "bertopic"
-    trainer.save(MODEL_PATH)
-    print("Model saved →", MODEL_PATH)
+    model_path = MODELS_DIR / "bertopic"
+    trainer.save(model_path)
+    print("Модель сохранена →", model_path)
 
     df["topic"] = topics
-    df["probability"] = probs
+    df["probability"] = probabilities
     df["topic_name"] = df["topic"].map(trainer.model.topic_labels_)
 
-    out = df[["id", "collection", "clean_text", "topic_name", "probability"]]
+    output_df = df[["id", "collection", "clean_text", "topic_name", "probability"]]
     OUTPUTS_DIR.mkdir(exist_ok=True)
-    dst = OUTPUTS_DIR / "topics.csv"
-    out.to_csv(dst, index=False, encoding="utf-8")
-    print("Results saved →", dst)
+    result_path = OUTPUTS_DIR / "topics.csv"
+    output_df.to_csv(result_path, index=False, encoding="utf-8")
+    print("Результаты сохранены →", result_path)
 
 
-def menu():
+def main_menu() -> None:
+    """Главное меню приложения."""
     while True:
         print("""
-1) Preprocess data
-2) Train model
-0) Exit
+1) Предобработать данные
+2) Обучить модель
+0) Выход
 """)
-        c = input("Choice: ").strip()
-        if c == "1":
+        choice = input("Выберите опцию: ").strip()
+        if choice == "1":
             run_preprocessing()
-        elif c == "2":
-            run_train()
-        elif c == "0":
+        elif choice == "2":
+            run_training()
+        elif choice == "0":
             sys.exit()
         else:
-            print("Invalid, try again.")
+            print("Неверный ввод, попробуйте снова.")
 
 
 if __name__ == "__main__":
-    menu()
+    main_menu()

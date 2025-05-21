@@ -4,32 +4,40 @@ from typing import List, Union
 import numpy as np
 from bertopic import BERTopic
 from bertopic.vectorizers import ClassTfidfTransformer
-from sentence_transformers import SentenceTransformer
-from sklearn.feature_extraction.text import CountVectorizer
-from umap import UMAP
 from hdbscan import HDBSCAN
+from sklearn.feature_extraction.text import CountVectorizer
+from sentence_transformers import SentenceTransformer
+from umap import UMAP
 from stop_words import get_stop_words
 
-from analysis import analyze_model  # <-- наш новый модуль
+from analysis import analyze_model
 
 
 class BERTopicTrainer:
     """
-    Инициализация и batch-обучение BERTopic на всем корпусе сразу,
-    с автоматическим анализом после train().
+    Инициализация и батч-обучение BERTopic с автоматическим анализом.
     """
 
-    def __init__(self):
-        sw = list(dict.fromkeys(
-            get_stop_words("russian") + get_stop_words("english")
+    def __init__(self) -> None:
+        # Стоп-слова
+        stopwords = list(dict.fromkeys(
+            get_stop_words("russian") +
+            get_stop_words("english")
         ))
 
+        # Модель эмбеддингов
         embedder = SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
+        # UMAP для снижения размерности
         umap_model = UMAP(
-            n_neighbors=40, n_components=2, min_dist=0.0,
-            low_memory=True, n_jobs=-1
+            n_neighbors=40,
+            n_components=2,
+            min_dist=0.0,
+            low_memory=True,
+            n_jobs=-1
         )
+
+        # HDBSCAN для кластеризации
         hdbscan_model = HDBSCAN(
             min_cluster_size=50,
             cluster_selection_method="leaf",
@@ -37,18 +45,22 @@ class BERTopicTrainer:
             prediction_data=True,
             core_dist_n_jobs=-1
         )
-        vectorizer = CountVectorizer(
-            stop_words=sw, ngram_range=(1, 2),
-            min_df=30, max_df=0.85
+
+        # Векторизация текста
+        vectorizer_model = CountVectorizer(
+            stop_words=stopwords,
+            ngram_range=(1, 2),
+            min_df=30,
+            max_df=0.85
         )
-        ctfidf = ClassTfidfTransformer()
+        ctfidf_model = ClassTfidfTransformer()
 
         self.model = BERTopic(
             embedding_model=embedder,
             umap_model=umap_model,
             hdbscan_model=hdbscan_model,
-            vectorizer_model=vectorizer,
-            ctfidf_model=ctfidf
+            vectorizer_model=vectorizer_model,
+            ctfidf_model=ctfidf_model
         )
 
     def train(self,
@@ -56,29 +68,33 @@ class BERTopicTrainer:
               analyze: bool = True
               ) -> (List[int], np.ndarray):
         """
-        1) Кодируем все docs (показываем прогресс-бар)
-        2) Обучаем модель
-        3) Автоматически вызываем анализ (если analyze=True)
+        1) Кодирование документов (с прогресс-баром).
+        2) Обучение модели и получение тем и вероятностей.
+        3) Автоматический анализ (если analyze=True).
         """
         embeddings = self.model.embedding_model.encode(
-            docs, show_progress_bar=True
+            docs,
+            show_progress_bar=True
         )
-        topics, probs = self.model.fit_transform(
-            docs, embeddings=embeddings
+        topics, probabilities = self.model.fit_transform(
+            docs,
+            embeddings=embeddings
         )
 
         if analyze:
             analyze_model(self.model, docs, topics, embeddings)
 
-        return topics, probs
+        return topics, probabilities
 
-    def save(self, path: Union[str, Path]):
-        p = Path(path)
-        p.parent.mkdir(exist_ok=True, parents=True)
-        self.model.save(str(p))
+    def save(self, path: Union[str, Path]) -> None:
+        """Сохранение модели на диск."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.model.save(str(path))
 
     @classmethod
     def load(cls, path: Union[str, Path]) -> "BERTopicTrainer":
-        t = cls()
-        t.model = BERTopic.load(str(path))
-        return t
+        """Загрузка модели из директории."""
+        trainer = cls()
+        trainer.model = BERTopic.load(str(path))
+        return trainer

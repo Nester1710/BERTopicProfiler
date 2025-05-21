@@ -1,9 +1,18 @@
-# preprocessing.py
-
 import inspect
+import re
 from collections import namedtuple
+from functools import partial
+from pathlib import Path
+from typing import Set, List, Union
+import multiprocessing
 
-# Заглушка для inspect.getargspec (нужна pymorphy2)
+import pandas as pd
+import pymorphy2
+from tqdm import tqdm
+
+from data_loader import DataLoader
+
+# Заглушка для inspect.getargspec в Python>=3
 ArgSpec = namedtuple("ArgSpec", ["args", "varargs", "varkw", "defaults"])
 if not hasattr(inspect, "getargspec"):
     def getargspec(func):
@@ -11,36 +20,31 @@ if not hasattr(inspect, "getargspec"):
         return ArgSpec(full.args, full.varargs, full.varkw, full.defaults)
     inspect.getargspec = getargspec
 
-import re
-from pathlib import Path
-from typing import Union, Set, List
 
-import pandas as pd
-from tqdm import tqdm
-import pymorphy2
-import multiprocessing
-from functools import partial
-
-from data_loader import DataLoader
-
-# Инициализация морфо-анализатора на каждый процесс
-def init_worker():
+def init_worker() -> None:
+    """Инициализация морфологического анализатора в каждом процессе."""
     global morph
     morph = pymorphy2.MorphAnalyzer()
 
-# Лемматизация и фильтрация токенов, выполняется последовательно в процессе
-def normalize_and_filter(toks: List[str], stopwords: Set[str]) -> str:
+
+def normalize_and_filter(tokens: List[str], stopwords: Set[str]) -> str:
+    """Лемматизация токенов и фильтрация стоп-слов."""
     lemmas = []
-    for w in toks:
-        if w and w not in stopwords:
-            lm = morph.parse(w)[0].normal_form
-            if lm and lm not in stopwords:
-                lemmas.append(lm)
+    for token in tokens:
+        if token and token not in stopwords:
+            normal_form = morph.parse(token)[0].normal_form
+            if normal_form and normal_form not in stopwords:
+                lemmas.append(normal_form)
     return " ".join(lemmas)
 
-# Очистка и лемматизация одной серии без вложенного пула
+
 def clean_text_vectorized(series: pd.Series, stopwords: Set[str]) -> pd.Series:
-    # 1) векторная очистка
+    """
+    Векторная очистка и лемматизация без многопроцесса:
+      - удаление URL, упоминаний, цифр, пунктуации
+      - токенизация
+      - последовательная лемматизация
+    """
     s = series.fillna("").str.lower()
     s = s.str.replace(r"http\S+|www\.\S+", "", regex=True)
     s = s.str.replace(r"[@#]\w+", "", regex=True)
@@ -48,45 +52,51 @@ def clean_text_vectorized(series: pd.Series, stopwords: Set[str]) -> pd.Series:
     s = s.str.replace(r"\d+", "", regex=True)
     s = s.str.replace(r"[^\w\s]", "", regex=True)
 
-    # 2) токенизация
-    tokens_list = s.str.split().tolist()
+    token_lists = s.str.split().tolist()
+    cleaned = [
+        normalize_and_filter(tokens, stopwords)
+        for tokens in token_lists
+    ]
+    return pd.Series(cleaned, index=series.index)
 
-    # 3) последовательная лемматизация в этом процессе
-    clean_list = [normalize_and_filter(toks, stopwords) for toks in tokens_list]
 
-    return pd.Series(clean_list, index=series.index)
-
-# Обработка одного файла (будет запускаться в пуле)
-def _process_file(path: Path, output_dir: Path, stopwords: Set[str]):
-    df = pd.read_csv(path)
+def _process_file(path: Path, output_dir: Path, stopwords: Set[str]) -> None:
+    """
+    Обработка одного CSV-файла:
+      - очистка текста
+      - подсчет количества слов
+      - сохранение результата
+    """
+    df = pd.read_csv(path, encoding="utf-8")
     if not {"text", "collection"}.issubset(df.columns):
         return
 
     df["clean_text"] = clean_text_vectorized(df["text"], stopwords)
     df["word_count"] = df["clean_text"].str.split().str.len()
+
+    # Фильтрация пустых текстов
     df = df[df["clean_text"].str.strip().astype(bool)].reset_index(drop=True)
 
-    out = df[["collection", "clean_text", "word_count"]].copy()
-    out.insert(0, "id", range(1, len(out) + 1))
+    result = df[["collection", "clean_text", "word_count"]].copy()
+    result.insert(0, "id", range(1, len(result) + 1))
 
-    dst = output_dir / f"{path.stem}_preprocessed.csv"
-    out.to_csv(dst, index=False, encoding="utf-8")
+    output_path = output_dir / f"{path.stem}_preprocessed.csv"
+    result.to_csv(output_path, index=False, encoding="utf-8")
+
 
 def preprocess_datasets(raw_dir: Union[str, Path],
                         output_dir: Union[str, Path],
                         stopwords: Set[str]) -> None:
     """
-    Параллельная обработка по файлам:
-      - пул процессов инициализируется один раз
-      - каждый процесс загружает, очищает, лемматизирует и сохраняет свой файл
+    Параллельная обработка всех файлов из raw_dir с сохранением в output_dir.
     """
-    raw_dir = Path(raw_dir)
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = Path(raw_dir)
+    out_path = Path(output_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
 
-    files = DataLoader(raw_dir, output_dir).list_raw_datasets()
-    cpu = multiprocessing.cpu_count()
+    files = DataLoader(raw_path, out_path).list_raw_datasets()
+    cpu_count = multiprocessing.cpu_count()
 
-    with multiprocessing.Pool(cpu, initializer=init_worker) as pool:
-        func = partial(_process_file, output_dir=output_dir, stopwords=stopwords)
-        list(tqdm(pool.imap(func, files), total=len(files), desc="Preprocessing"))
+    with multiprocessing.Pool(cpu_count, initializer=init_worker) as pool:
+        worker = partial(_process_file, output_dir=out_path, stopwords=stopwords)
+        list(tqdm(pool.imap(worker, files), total=len(files), desc="Preprocessing"))
